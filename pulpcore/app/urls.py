@@ -111,7 +111,11 @@ for viewset in sorted_by_depth:
 #: The Pulp Platform v3 API router, which can be used to manually register ViewSets with the API.
 root_router = routers.DefaultRouter()
 
+import debug_toolbar
+from django.urls import include, path
+
 urlpatterns = [
+    path('__debug__/', include(debug_toolbar.urls)),
     url(r'^{api_root}status/'.format(api_root=API_ROOT), StatusView.as_view()),
     url(r'^{api_root}orphans/'.format(api_root=API_ROOT), OrphansView.as_view()),
     url(r'^auth/', include('rest_framework.urls')),

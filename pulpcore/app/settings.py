@@ -24,7 +24,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # See https://docs.djangoproject.com/en/1.11/howto/deployment/checklist/
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = ['*']
 
@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'rest_framework',
     # pulp core app
     'pulpcore.app',
+    'debug_toolbar'
 ]
 
 # Enumerate the installed Pulp plugins during the loading process for use in the status API
@@ -80,6 +81,8 @@ for app in OPTIONAL_APPS:
         import_module(app)
         INSTALLED_APPS.append(app)
 
+MIDDLEWARE_CLASSES = ['debug_toolbar.middleware.DebugToolbarMiddleware']
+
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
@@ -90,7 +93,27 @@ MIDDLEWARE = [
     'pulpcore.app.middleware.PulpRemoteUserMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'debug_toolbar.middleware.DebugToolbarMiddleware'
 ]
+
+DEBUG_TOOLBAR_PANELS = [
+       'debug_toolbar.panels.versions.VersionsPanel',
+       'debug_toolbar.panels.timer.TimerPanel',
+       'debug_toolbar.panels.settings.SettingsPanel',
+       'debug_toolbar.panels.headers.HeadersPanel',
+       'debug_toolbar.panels.request.RequestPanel',
+       'debug_toolbar.panels.sql.SQLPanel',
+       'debug_toolbar.panels.staticfiles.StaticFilesPanel',
+       'debug_toolbar.panels.templates.TemplatesPanel',
+       'debug_toolbar.panels.cache.CachePanel',
+       'debug_toolbar.panels.signals.SignalsPanel',
+       'debug_toolbar.panels.logging.LoggingPanel',
+       'debug_toolbar.panels.redirects.RedirectsPanel',
+]
+
+DEBUG_TOOLBAR_CONFIG = {
+    'INTERCEPT_REDIRECTS': False,
+}
 
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
@@ -211,6 +234,12 @@ CONTENT_APP_TTL = 30
 REMOTE_USER_ENVIRON_NAME = "REMOTE_USER"
 
 PROFILE_STAGES_API = False
+
+INTERNAL_IPS = [
+    # ...
+    '127.0.0.1', 'localhost',
+    # ...
+]
 
 SWAGGER_SETTINGS = {
     'DEFAULT_GENERATOR_CLASS': 'pulpcore.app.openapigenerator.PulpOpenAPISchemaGenerator',
