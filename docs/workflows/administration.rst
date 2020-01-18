@@ -14,22 +14,32 @@ from being forged.
 
 The following procedure should be considered for administrators:
 
-    1. A signing script with a certain input and output format is created::
+    1. A signing script with a certain input and output format is created, for example::
 
-        #!/usr/bin/python3
+        #!/usr/bin/env bash
 
-        import os, subprocess, sys
+        FILE_PATH=$1
+        SIGNATURE_PATH="$1.asc"
+        PUBLIC_KEY_PATH="public.key"
 
-        repo_id = os.environ.get("GPG_REPOSITORY_NAME", "")
-        key_id = "my-devel-key" if repo_id.endswith("-devel") else "my-key"
+        ADMIN_ID="27B3E8915B0C58FB"
+        PASSWORD="password"
 
-        fname = sys.argv[1]
+        # Export a public key
+        gpg --armor --export admin@example.com > $PUBLIC_KEY_PATH
 
-        cmd = ["/usr/bin/gpg", "--homedir", "/var/lib/pulp/gpg-home",
-               "--detach-sign", "--default-key", key_id, "--armor",
-               "--output", fname + ".asc", fname]
+        # Create a detached signature for the file
+        gpg --quiet --batch --pinentry-mode loopback --yes --passphrase \
+            $PASSWORD --homedir ~/.gnupg/ --detach-sign --default-key $ADMIN_ID \
+            --armor --output $SIGNATURE_PATH $FILE_PATH
 
-        sys.exit(subprocess.call(cmd))
+        STATUS=$?
+        if [ $STATUS -eq 0 ]; then
+            echo {\"file\": \"$FILE_PATH\", \"signature\": \"$SIGNATURE_PATH\", \
+                \"key\": \"$PUBLIC_KEY_PATH\"}
+        else
+            exit $STATUS
+        fi
 
     2. A path to the script and a meaningful name describing the script's purpose is created in a
        database leveraging the django-admin shell_plus utility::
@@ -41,4 +51,9 @@ The following procedure should be considered for administrators:
             script="/var/lib/pulp/scripts/sign-metadata.sh"
         )
 
-Plugin writers utilize signing scripts.
+Plugin writers may sign content by leveraging the given script. Then, a user can verify the content
+with an associated public key provided by an administrator. Both document and the signature are
+required to verify the signature::
+
+        gpg --import /var/lib/pulp/gpg-home/public.key
+        gpg --verify filename.asc filename
