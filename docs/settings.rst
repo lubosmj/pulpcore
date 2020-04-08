@@ -232,3 +232,13 @@ PROFILE_STAGES_API
 
       Profiling stages is provided as a tech preview in Pulp 3.0. Functionality may not fully work
       and backwards compatibility when upgrading to future Pulp releases is not guaranteed.
+
+
+MAX_HEADER_SIZE
+^^^^^^^^^^^^^^^
+
+   A maximum number of bytes allowed in a single header.
+
+   Defaults to ``None`` which means that an allowed number of bytes is equal to ``max_field_size``.
+   See `aiohttp Application runner <https://docs.aiohttp.org/en/stable/web_reference.html#application>`_
+   to learn more.

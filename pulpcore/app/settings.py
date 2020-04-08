@@ -226,6 +226,9 @@ REDOC_SETTINGS = {
     'SPEC_URL': '/pulp/api/v3/docs/?format=openapi&include_html=1',
 }
 
+# a maximum number of bytes allowed in a header
+MAX_HEADER_SIZE = None
+
 # HERE STARTS DYNACONF EXTENSION LOAD (Keep at the very bottom of settings.py)
 # Read more at https://dynaconf.readthedocs.io/en/latest/guides/django.html
 import dynaconf  # noqa
