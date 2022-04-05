@@ -20,7 +20,7 @@ class OrphansCleanupSerializer(serializers.Serializer, ValidateFieldsMixin):
             "they become candidates for deletion by this orphan cleanup task. This should ideally "
             "be longer than your longest running task otherwise any content created during that "
             "task could be cleaned up before the task finishes. If not specified, default is used "
-            "from settings which is 1440 minutes (24 hours)"
+            "from the setting ORPHAN_PROTECTION_TIME."
         ),
         allow_null=True,
         required=False,
