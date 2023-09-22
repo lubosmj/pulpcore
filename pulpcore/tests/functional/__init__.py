@@ -1,5 +1,6 @@
 import aiohttp
 import asyncio
+import json
 import os
 import shutil
 import socket
@@ -17,10 +18,19 @@ import pytest
 from aiohttp import web
 from contextlib import suppress
 from dataclasses import dataclass
+from filelock import FileLock
 from packaging.version import parse as parse_version
 from time import sleep
 from yarl import URL
 from opentelemetry.proto.trace.v1.trace_pb2 import TracesData
+from opentelemetry.context import (
+    _SUPPRESS_INSTRUMENTATION_KEY,
+    Context,
+    attach,
+    detach,
+    set_value,
+)
+from opentelemetry.sdk.trace import export
 
 from pulpcore.tests.functional.utils import (
     SLEEP_TIME,
@@ -416,8 +426,16 @@ class ThreadedAiohttpServerData:
         return f"{protocol_handler}{self.host}:{self.port}{path}"
 
 
+@pytest.fixture(scope="session")
+def monkeysession(request):
+    from _pytest.monkeypatch import MonkeyPatch
+    mpatch = MonkeyPatch()
+    yield mpatch
+    mpatch.undo()
+
+
 # Fake OTel collector
-@pytest.fixture(autouse=True, scope="session")
+@pytest.fixture(scope="session")
 def _otel_collector(status_api_client):
     if (
         os.environ.get("PULP_OTEL_ENABLED") != "true"
