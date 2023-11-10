@@ -71,44 +71,41 @@ class QueryExistingArtifacts(Stage):
             The coroutine for this stage.
         """
         async for batch in self.batches():
-            artifact_digests_by_type = defaultdict(list)
+            artifacts_digests = []
 
             # For each unsaved artifact, check its digests in the order of COMMON_DIGEST_FIELDS
             # and the first digest which is found is added to the list of digests of that type.
             # We assume that in general only one digest is provided and that it will be
             # sufficient to identify the Artifact.
             for d_content in batch:
-                for d_artifact in d_content.d_artifacts:
-                    if d_artifact.artifact._state.adding:
-                        if not d_artifact.deferred_download:
-                            _check_for_forbidden_checksum_type(d_artifact.artifact)
-                        for digest_type in Artifact.COMMON_DIGEST_FIELDS:
-                            digest_value = getattr(d_artifact.artifact, digest_type)
-                            if digest_value:
-                                artifact_digests_by_type[digest_type].append(digest_value)
-                                break
+                d_artifact = d_content.d_artifacts[0]
+                if d_artifact.artifact._state.adding:
+                    digest_value = d_artifact.artifact.sha256
+                    artifacts_digests.append(digest_value)
 
             # For each type of digest, fetch all the existing Artifacts where digest "in"
             # the list we built earlier. Walk over all the artifacts again compare the
             # digest of the new artifact to those of the existing ones - if one matches,
             # swap it out with the existing one.
-            for digest_type, digests in artifact_digests_by_type.items():
-                query_params = {
-                    "{attr}__in".format(attr=digest_type): digests,
-                    "pulp_domain": self.domain,
-                }
-                existing_artifacts_qs = Artifact.objects.filter(**query_params)
-                existing_artifacts = sync_to_async_iterable(existing_artifacts_qs)
-                await sync_to_async(existing_artifacts_qs.touch)()
-                for d_content in batch:
-                    for d_artifact in d_content.d_artifacts:
-                        artifact_digest = getattr(d_artifact.artifact, digest_type)
-                        if artifact_digest:
-                            async for result in existing_artifacts:
-                                result_digest = getattr(result, digest_type)
-                                if result_digest == artifact_digest:
-                                    d_artifact.artifact = result
-                                    break
+            query_params = {
+                "sha256__in": artifacts_digests,
+                "pulp_domain": self.domain,
+            }
+
+            existing_artifacts_qs = Artifact.objects.filter(**query_params)
+            await sync_to_async(existing_artifacts_qs.touch)()
+
+            d = {}
+            async for result in sync_to_async_iterable(existing_artifacts_qs):
+                d[result.sha256] = result
+
+            for d_content in batch:
+                d_artifact = d_content.d_artifacts[0]
+                artifact_digest = d_artifact.artifact.sha256
+                m = d.get(artifact_digest)
+                if m:
+                    d_artifact.artifact = m
+
             for d_content in batch:
                 await self.put(d_content)
 
