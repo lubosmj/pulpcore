@@ -3,8 +3,9 @@ import uuid
 
 from pulpcore.client.pulpcore import ApiException
 from pulpcore.client.pulpcore import AsyncOperationResponse
+from pulpcore.client.pulp_file import RepositorySyncURL
 
-from pulpcore.tests.functional.utils import PulpTaskGroupError
+from pulpcore.tests.functional.utils import PulpTaskGroupError, generate_iso
 
 
 @pytest.mark.parallel
@@ -225,6 +226,133 @@ SQiVeWgI8fDCpQ/6KiI7F3el8nEc5w==
     task_group = monitor_task_group(response.task_group)
     for task in task_group.tasks:
         assert task.state == "completed"
+
+
+@pytest.mark.parallel
+def test_replication_optimization(
+    check_replication,
+    domain_factory,
+    bindings_cfg,
+    pulpcore_bindings,
+    pulp_settings,
+    file_bindings,
+    file_repository_factory,
+    file_remote_factory,
+    file_distribution_factory,
+    file_publication_factory,
+    basic_manifest_path,
+    monitor_task,
+    gen_object_with_cleanup,
+    tmp_path,
+):
+    non_default_domain = domain_factory()
+    source_domain = domain_factory()
+    upstream_pulp_body = {
+        "name": str(uuid.uuid4()),
+        "base_url": bindings_cfg.host,
+        "api_root": pulp_settings.API_ROOT,
+        "domain": source_domain.name,
+        "username": bindings_cfg.username,
+        "password": bindings_cfg.password,
+    }
+    upstream_pulp = gen_object_with_cleanup(
+        pulpcore_bindings.UpstreamPulpsApi, upstream_pulp_body, pulp_domain=non_default_domain.name
+    )
+
+    # sync a repository on the "remote" Pulp instance
+    upstream_remote = file_remote_factory(
+        pulp_domain=source_domain.name, manifest_path=basic_manifest_path, policy="immediate"
+    )
+    upstream_repository = file_repository_factory(pulp_domain=source_domain.name)
+
+    repository_sync_data = RepositorySyncURL(remote=upstream_remote.pulp_href, mirror=True)
+    response = file_bindings.RepositoriesFileApi.sync(
+        upstream_repository.pulp_href, repository_sync_data
+    )
+    monitor_task(response.task)
+    upstream_repository = file_bindings.RepositoriesFileApi.read(upstream_repository.pulp_href)
+    upstream_publication = file_publication_factory(
+        pulp_domain=source_domain.name, repository_version=upstream_repository.latest_version_href
+    )
+    upstream_distribution = file_distribution_factory(
+        pulp_domain=source_domain.name, publication=upstream_publication.pulp_href
+    )
+
+    # replicate the "remote" instance
+    check_replication(upstream_pulp, upstream_distribution, non_default_domain)
+
+    # replicate the "remote" instance again to check if the timestamp was NOT changed
+    check_replication(upstream_pulp, upstream_distribution, non_default_domain)
+
+    # upload new content to the repository on the "remote" Pulp instance (creating a new version)
+    filename = tmp_path / str(uuid.uuid4())
+    generate_iso(filename)
+    relative_path = "1.iso"
+
+    response = file_bindings.ContentFilesApi.create(
+        relative_path,
+        file=filename,
+        repository=upstream_repository.pulp_href,
+        pulp_domain=source_domain.name,
+    )
+    monitor_task(response.task)
+    upstream_repository = file_bindings.RepositoriesFileApi.read(upstream_repository.pulp_href)
+    upstream_publication = file_publication_factory(
+        pulp_domain=source_domain.name, repository_version=upstream_repository.latest_version_href
+    )
+    response = file_bindings.DistributionsFileApi.partial_update(
+        upstream_distribution.pulp_href,
+        {"publication": upstream_publication.pulp_href},
+    )
+    monitor_task(response.task)
+
+    # replicate the "remote" instance to check if the timestamp was correctly changed
+    check_replication(upstream_pulp, upstream_distribution, non_default_domain)
+
+
+@pytest.fixture
+def check_replication(pulpcore_bindings, file_bindings, monitor_task_group):
+    def _check_replication(upstream_pulp, upstream_distribution, local_domain):
+        response = pulpcore_bindings.UpstreamPulpsApi.replicate(upstream_pulp.pulp_href)
+        # check if the replication succeeded
+        task_group = monitor_task_group(response.task_group)
+        for task in task_group.tasks:
+            assert task.state == "completed"
+
+        upstream_distribution = file_bindings.DistributionsFileApi.read(
+            upstream_distribution.pulp_href
+        )
+        distribution = file_bindings.DistributionsFileApi.list(
+            name=upstream_distribution.name,
+            pulp_domain=local_domain.name,
+        ).results[0]
+
+        upstream_pulp = pulpcore_bindings.UpstreamPulpsApi.read(upstream_pulp.pulp_href)
+        # check if the timestamps of the updated distribution match
+        for timestamp in upstream_pulp.last_updated_timestamps:
+            if timestamp.distribution == distribution.pulp_href:
+                assert upstream_distribution.content_last_updated == timestamp.content_last_updated
+                break
+        else:
+            assert False, "The replica of the upstream distribution was not found"
+
+        # check if the content was correctly replicated
+        local_version = file_bindings.RepositoriesFileApi.read(
+            distribution.repository
+        ).latest_version_href
+        local_present = file_bindings.RepositoriesFileVersionsApi.read(
+            local_version
+        ).content_summary.present
+        upstream_version = file_bindings.PublicationsFileApi.read(
+            upstream_distribution.publication
+        ).repository_version
+        upstream_present = file_bindings.RepositoriesFileVersionsApi.read(
+            upstream_version
+        ).content_summary.present
+
+        assert upstream_present["file.file"]["count"] == local_present["file.file"]["count"]
+
+    return _check_replication
 
 
 @pytest.fixture()

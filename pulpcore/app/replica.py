@@ -1,5 +1,9 @@
-from django.db.models import Model
 import logging
+
+from datetime import datetime, timezone
+
+from django.db.models import Model
+from django.utils.dateparse import parse_datetime
 
 from pulp_glue.common.context import PulpContext
 from pulpcore.tasking.tasks import dispatch
@@ -8,6 +12,12 @@ from pulpcore.app.tasks.base import (
     general_create,
     general_multi_delete,
 )
+from pulpcore.app.models import (
+    Distribution,
+    LastUpdatedRecord,
+    UpstreamPulp,
+)
+
 from pulpcore.plugin.util import get_url, get_domain
 
 _logger = logging.getLogger(__name__)
@@ -45,7 +55,7 @@ class Replicator:
     app_label = None
     sync_task = None
 
-    def __init__(self, pulp_ctx, task_group, tls_settings):
+    def __init__(self, pulp_ctx, task_group, tls_settings, server):
         """
         :param pulp_ctx: PulpReplicaContext
         :param task_group: TaskGroup
@@ -54,6 +64,7 @@ class Replicator:
         self.pulp_ctx = pulp_ctx
         self.task_group = task_group
         self.tls_settings = tls_settings
+        self.server = server
         self.domain = get_domain()
         self.distros_uris = [f"pdrn:{self.domain.pulp_id}:distributions"]
 
@@ -161,11 +172,12 @@ class Replicator:
 
     def create_or_update_distribution(self, repository, upstream_distribution):
         distribution_data = self.distribution_data(repository, upstream_distribution)
+        content_last_updated = self._get_last_updated_timestamp(upstream_distribution)
         try:
             distro = self.distribution_model_cls.objects.get(
                 name=upstream_distribution["name"], pulp_domain=self.domain
             )
-            # Check that the distribution has the right repository associated
+            self._update_or_create_record_timestamps(distro, content_last_updated)
             needs_update = self.needs_update(distribution_data, distro)
             if needs_update:
                 # Update the distribution
@@ -182,19 +194,81 @@ class Replicator:
                 )
         except self.distribution_model_cls.DoesNotExist:
             # Dispatch a task to create the distribution
-            distribution_data["name"] = upstream_distribution["name"]
+            distribution_name = distribution_data["name"] = upstream_distribution["name"]
             dispatch(
-                general_create,
+                distribution_create,
                 task_group=self.task_group,
                 shared_resources=[repository],
                 exclusive_resources=self.distros_uris,
-                args=(self.app_label, self.distribution_serializer_name),
+                args=(
+                    self.app_label,
+                    self.distribution_serializer_name,
+                    distribution_name,
+                    self.server.pk,
+                    None if content_last_updated is None else str(content_last_updated),
+                ),
                 kwargs={"data": distribution_data},
             )
+
+    @staticmethod
+    def _get_last_updated_timestamp(upstream_distribution):
+        if content_last_updated := upstream_distribution.get("content_last_updated"):
+            return parse_datetime(content_last_updated)
+
+    def _update_or_create_record_timestamps(self, distro, content_last_updated):
+        try:
+            distribution_timestamp = LastUpdatedRecord.objects.get(
+                distribution=distro, upstream_pulp=self.server
+            )
+        except LastUpdatedRecord.DoesNotExist:
+            LastUpdatedRecord.objects.create(
+                distribution=distro,
+                upstream_pulp=self.server,
+                content_last_updated=content_last_updated,
+                last_replication=datetime.now(timezone.utc),
+            )
+        else:
+            if content_last_updated != distribution_timestamp.content_last_updated:
+                distribution_timestamp.content_last_updated = content_last_updated
+            distribution_timestamp.last_replication = datetime.now(timezone.utc)
+
+            distribution_timestamp.save(update_fields=["content_last_updated", "last_replication"])
 
     def sync_params(self, repository, remote):
         """This method returns a dict that will be passed as kwargs to the sync task."""
         raise NotImplementedError("Each replicator must supply its own sync params.")
+
+    def requires_syncing(self, distro):
+        try:
+            local_distribution = Distribution.objects.get(
+                name=distro["name"], pulp_domain=self.domain
+            )
+        except Distribution.DoesNotExist:
+            # a local equivalent of the upstream distribution has not been created yet
+            return True
+
+        try:
+            updated_timestamp = LastUpdatedRecord.objects.get(
+                distribution=local_distribution, upstream_pulp=self.server
+            )
+        except LastUpdatedRecord.DoesNotExist:
+            # missing data about last updates, perhaps because the local replica does not exist
+            return True
+
+        if updated_timestamp.last_replication < self.server.pulp_last_updated:
+            # the server configuration has changed since the last time (e.g., the value of base-url)
+            return True
+
+        if updated_timestamp.last_replication < parse_datetime(distro["pulp_last_updated"]):
+            # the upstream distribution has been updated since the last time
+            return True
+
+        if updated_timestamp.content_last_updated is not None:
+            if updated_timestamp.content_last_updated == self._get_last_updated_timestamp(distro):
+                # the upstream source has not changed
+                return False
+
+        return True
 
     def sync(self, repository, remote):
         dispatch(
@@ -246,3 +320,19 @@ class Replicator:
                 exclusive_resources=repositories + remotes,
                 args=(repository_ids + remote_ids,),
             )
+
+
+def distribution_create(app_label, serializer_name, distro_name, server_pk, last_updated, **kwargs):
+    general_create(app_label, serializer_name, **kwargs)
+    upstream_timestamp_create(distro_name, server_pk, last_updated)
+
+
+def upstream_timestamp_create(distribution_name, server_pk, last_updated):
+    distribution = Distribution.objects.get(name=distribution_name, pulp_domain=get_domain())
+    server = UpstreamPulp.objects.get(pk=server_pk)
+    LastUpdatedRecord.objects.create(
+        distribution=distribution,
+        upstream_pulp=server,
+        content_last_updated=None if last_updated is None else parse_datetime(last_updated),
+        last_replication=datetime.now(timezone.utc),
+    )

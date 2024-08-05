@@ -91,4 +91,4 @@ from .upload import (
 from .progress import GroupProgressReport, ProgressReport
 
 # Moved here to avoid a circular import with GroupProgressReport
-from .replica import UpstreamPulp
+from .replica import UpstreamPulp, LastUpdatedRecord

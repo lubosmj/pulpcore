@@ -1,6 +1,8 @@
 from gettext import gettext as _
 
-from django.db.models import Q
+from contextlib import suppress
+
+from django.db.models import Q, ObjectDoesNotExist
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
@@ -160,6 +162,45 @@ class HeaderContentGuardSerializer(ContentGuardSerializer, GetOrCreateSerializer
         fields = ContentGuardSerializer.Meta.fields + ("header_name", "header_value", "jq_filter")
 
 
+class ContentLastUpdatedField(serializers.DateTimeField, serializers.ReadOnlyField):
+    """
+    A serializer field representing the last updated timestamp for a used content source.
+    """
+
+    def get_attribute(self, instance):
+        return instance
+
+    def to_representation(self, instance):
+        """
+        Fetch the last_updated timestamp of the content source (e.g., publication).
+        """
+        repository = instance.repository
+        publication = instance.publication
+        repo_version = instance.repository_version
+
+        if publication:
+            return publication.pulp_last_updated
+
+        if repo_version and not instance.SERVE_FROM_PUBLICATION:
+            return repo_version.pulp_last_updated
+
+        if repository:
+            with suppress(ObjectDoesNotExist):
+                versions = repository.versions.all()
+                publications = models.Publication.objects.filter(
+                    repository_version__in=versions, complete=True
+                )
+                publication = publications.select_related("repository_version").latest(
+                    "repository_version", "pulp_created"
+                )
+                return publication.pulp_last_updated
+
+            repo_version = repository.latest_version()
+            return repo_version.pulp_last_updated
+
+        return None
+
+
 class DistributionSerializer(ModelSerializer):
     """
     The Serializer for the Distribution model.
@@ -232,6 +273,9 @@ class DistributionSerializer(ModelSerializer):
     hidden = serializers.BooleanField(
         default=False, help_text=_("Whether this distribution should be shown in the content app.")
     )
+    content_last_updated = ContentLastUpdatedField(
+        help_text=_("Last updated timestamp of the content source (e.g., repository_version).")
+    )
 
     class Meta:
         model = models.Distribution
@@ -239,6 +283,7 @@ class DistributionSerializer(ModelSerializer):
             "base_path",
             "base_url",
             "content_guard",
+            "content_last_updated",
             "hidden",
             "pulp_labels",
             "name",

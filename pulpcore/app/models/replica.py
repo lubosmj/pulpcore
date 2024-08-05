@@ -6,8 +6,13 @@ Check `Plugin Writer's Guide`_ for more details.
 """
 
 from django.db import models
-from pulpcore.plugin.models import BaseModel, EncryptedTextField, AutoAddObjPermsMixin
 from pulpcore.app.util import get_domain_pk
+from pulpcore.plugin.models import (
+    AutoAddObjPermsMixin,
+    BaseModel,
+    Distribution,
+    EncryptedTextField,
+)
 
 
 class UpstreamPulp(BaseModel, AutoAddObjPermsMixin):
@@ -28,9 +33,21 @@ class UpstreamPulp(BaseModel, AutoAddObjPermsMixin):
 
     pulp_label_select = models.TextField(null=True)
 
+    last_updated_timestamps = models.ManyToManyField(Distribution, through="LastUpdatedRecord")
+
     class Meta:
         unique_together = ("name", "pulp_domain")
         permissions = [
             ("replicate_upstreampulp", "Can start a replication task"),
             ("manage_roles_upstreampulp", "Can manage roles on upstream pulps"),
         ]
+
+
+class LastUpdatedRecord(BaseModel):
+    distribution = models.ForeignKey(Distribution, on_delete=models.CASCADE)
+    upstream_pulp = models.ForeignKey(UpstreamPulp, on_delete=models.CASCADE)
+    content_last_updated = models.DateTimeField(null=True)
+    last_replication = models.DateTimeField()
+
+    class Meta:
+        unique_together = ("distribution", "upstream_pulp")

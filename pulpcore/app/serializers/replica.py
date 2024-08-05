@@ -3,14 +3,31 @@ from gettext import gettext as _
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 
-from pulpcore.app.serializers import HiddenFieldsMixin
 from pulpcore.app.serializers import (
+    DetailRelatedField,
+    HiddenFieldsMixin,
     IdentityField,
     ModelSerializer,
 )
 
 
-from pulpcore.app.models import UpstreamPulp
+from pulpcore.app.models import UpstreamPulp, Distribution, LastUpdatedRecord
+
+
+class LastUpdatedRecordSerializer(ModelSerializer):
+    """
+    Serializer for records of the last update timestamps from Server's distributions.
+    """
+
+    distribution = DetailRelatedField(
+        view_name_pattern=r"distributions(-.*/.*)-detail",
+        queryset=Distribution.objects.all(),
+    )
+    content_last_updated = serializers.DateTimeField(read_only=True)
+
+    class Meta:
+        model = LastUpdatedRecord
+        fields = ("distribution", "content_last_updated")
 
 
 class UpstreamPulpSerializer(ModelSerializer, HiddenFieldsMixin):
@@ -85,6 +102,16 @@ class UpstreamPulpSerializer(ModelSerializer, HiddenFieldsMixin):
         required=False,
     )
 
+    last_updated_timestamps = LastUpdatedRecordSerializer(
+        help_text=_(
+            "A list of pairs of local distributions and last "
+            "updated timestamps of their upstream equivalents"
+        ),
+        source="lastupdatedrecord_set",
+        many=True,
+        read_only=True,
+    )
+
     class Meta:
         abstract = True
         model = UpstreamPulp
@@ -96,6 +123,7 @@ class UpstreamPulpSerializer(ModelSerializer, HiddenFieldsMixin):
             "ca_cert",
             "client_cert",
             "client_key",
+            "last_updated_timestamps",
             "tls_validation",
             "username",
             "password",

@@ -115,4 +115,4 @@ from .user import (
     UserRoleSerializer,
     UserSerializer,
 )
-from .replica import UpstreamPulpSerializer
+from .replica import UpstreamPulpSerializer, LastUpdatedRecordSerializer
